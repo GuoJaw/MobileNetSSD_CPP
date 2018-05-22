@@ -1,0 +1,2 @@
+./ssd_detected ../MobileNetSSD_deploy.prototxt ../MobileNetSSD_deploy.caffemodel ../test1.avi 
+
