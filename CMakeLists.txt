@@ -14,7 +14,7 @@ foreach (_headerFile ${ssd_detected_HEADERS})
 endforeach()
 
 
-set (caffe_ssd_PATH  /home/gjw/caffe-ssd)
+set (caffe_ssd_PATH  /home/gjw/caffe-mobilenet-ssd)
 
 set (caffe_ssd_INCLUDE_DIRS ${caffe_ssd_PATH}/include)
 set (caffe_ssd_BUILD_DIRS ${caffe_ssd_PATH}/.build_release/src)
@@ -47,7 +47,7 @@ add_executable (ssd_detected ${ssd_detected_SOURCES})
 set (caffe_ssd_LIBS ${caffe_ssd_PATH}/build/lib/libcaffe.so)
 set (boost_system_LIBS /usr/lib/x86_64-linux-gnu/libboost_system.so)
 set (gflags_LIBS /usr/lib/x86_64-linux-gnu/libgflags.so)
-set (glog_LIBS /usr/local/lib/libglog.so)
+set (glog_LIBS /usr/lib/x86_64-linux-gnu/libglog.so)
 
 
 target_link_libraries( ssd_detected 
