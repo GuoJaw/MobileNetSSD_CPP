@@ -1,1 +1,222 @@
-草草草草
+
+/*
+程序功能：调用海康摄像头，进行物体检测
+	1.环境配置：
+			VS2013   OpenCV341   Release   X86
+	2.需要文件：
+			MobileNet-SSD的检测器：prototxt/caffemodel
+	3.IP地址修改：
+			修改到和路由器在同一个网络
+*/
+
+//海康SDK头文件
+#include<cstdlib>
+#include<cstring>
+#include<iostream>
+#include"Windows.h"
+#include"HCNetSDK.h"
+#include "plaympeg4.h"
+//OpenCV341
+#include <opencv2/core.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/dnn.hpp>
+//C++库文件
+#include <time.h>
+#include <string>
+#include <iostream>
+#include <time.h>
+
+using namespace cv;
+using namespace std;
+using namespace dnn;
+
+//全局变量
+Net net;
+float detect_thresh = 0.6;  //置信度
+//类别标签
+const char* classNames[] = { "background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair",
+"cow", "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor" };
+
+void MobileNetDetect(Mat& frame){
+	if (frame.empty())
+		exit(0);
+
+	net.setInput(blobFromImage(frame, 1.0 / 127.5, Size(300, 300), Scalar(127.5, 127.5, 127.5), true, false));
+	Mat cvOut = net.forward();
+
+	Mat detectionMat(cvOut.size[2], cvOut.size[3], CV_32F, cvOut.ptr<float>());
+	for (int i = 0; i < detectionMat.rows; i++)
+	{
+		int obj_class = detectionMat.at<float>(i, 1);
+		float confidence = detectionMat.at<float>(i, 2);
+
+		if (confidence > detect_thresh)
+		{
+			size_t objectClass = (size_t)(detectionMat.at<float>(i, 1));
+
+			int xLeftBottom = static_cast<int>(detectionMat.at<float>(i, 3) * frame.cols);
+			int yLeftBottom = static_cast<int>(detectionMat.at<float>(i, 4) * frame.rows);
+			int xRightTop = static_cast<int>(detectionMat.at<float>(i, 5) * frame.cols);
+			int yRightTop = static_cast<int>(detectionMat.at<float>(i, 6) * frame.rows);
+
+			Rect object((int)xLeftBottom, (int)yLeftBottom,
+				(int)(xRightTop - xLeftBottom),
+				(int)(yRightTop - yLeftBottom));
+
+			rectangle(frame, object, Scalar(0, 0, 255), 2);
+			putText(frame, classNames[obj_class], Point(xLeftBottom, yLeftBottom - 10), 3, 0.5, Scalar(0, 0, 255), 2);
+		}
+	}
+
+	imshow("Detection_Result", frame);
+	cv::waitKey(1);
+}
+
+
+
+LONG nPort = -1;
+volatile int gbHandling = 3;
+//解码回调 视频为YUV数据(YV12)，音频为PCM数据
+void CALLBACK DecCBFun(long nPort, char * pBuf, long nSize, FRAME_INFO * pFrameInfo, long nReserved1, long nReserved2)
+{
+	if (gbHandling)
+	{
+		gbHandling--;
+		return;
+	}
+	long lFrameType = pFrameInfo->nType;
+	if (lFrameType == T_YV12)
+	{
+		Mat pImg(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC3);
+		Mat src(pFrameInfo->nHeight + pFrameInfo->nHeight / 2, pFrameInfo->nWidth, CV_8UC1, pBuf);
+		cvtColor(src, pImg, CV_YUV2BGR_YV12);
+		//  Sleep(-1);
+
+		MobileNetDetect(pImg);
+
+		waitKey(1);
+	}
+	gbHandling = 3;
+}///实时流回调
+void CALLBACK fRealDataCallBack(LONG lRealHandle, DWORD dwDataType, BYTE *pBuffer, DWORD dwBufSize, void *pUser)
+{
+	switch (dwDataType)
+	{
+	case NET_DVR_SYSHEAD: //系统头
+		if (!PlayM4_GetPort(&nPort))  //获取播放库未使用的通道号
+		{
+			break;
+		}
+		//m_iPort = lPort; //第一次回调的是系统头，将获取的播放库port号赋值给全局port，下次回调数据时即使用此port号播放
+		if (dwBufSize > 0)
+		{
+			if (!PlayM4_SetStreamOpenMode(nPort, STREAME_REALTIME))  //设置实时流播放模式
+			{
+				break;
+			}
+			if (!PlayM4_OpenStream(nPort, pBuffer, dwBufSize, 10 * 1024 * 1024)) //打开流接口
+			{
+				break;
+			}
+			if (!PlayM4_Play(nPort, NULL)) //播放开始
+			{
+				break;
+			}
+			if (!PlayM4_SetDecCallBack(nPort, DecCBFun))
+			{
+				break;
+			}
+		}
+		break;
+	case NET_DVR_STREAMDATA:   //码流数据
+		if (dwBufSize > 0 && nPort != -1)
+		{
+			if (!PlayM4_InputData(nPort, pBuffer, dwBufSize))
+			{
+				cout << "error" << PlayM4_GetLastError(nPort) << endl;
+				break;
+			}
+		}
+		break;
+	default: //其他数据
+		if (dwBufSize > 0 && nPort != -1)
+		{
+			if (!PlayM4_InputData(nPort, pBuffer, dwBufSize))
+			{
+				break;
+			}
+		}
+		break;
+	}
+}
+void CALLBACK g_ExceptionCallBack(DWORD dwType, LONG lUserID, LONG lHandle, void *pUser)
+{
+	char tempbuf[256] = { 0 };
+	switch (dwType)
+	{
+	case EXCEPTION_RECONNECT:    //预览时重连
+		printf("----------reconnect--------%d\n", time(NULL));
+		break;
+	default:
+		break;
+	}
+}
+void main()
+{
+	//加载网络protobuf和caffemodel
+	net = readNetFromCaffe("MobileNetSSD_deploy.prototxt", "MobileNetSSD_deploy.caffemodel");
+	
+	//---------------------------------------
+	// 初始化
+	NET_DVR_Init();
+	//设置连接时间与重连时间
+	NET_DVR_SetConnectTime(2000, 1);
+	NET_DVR_SetReconnect(10000, true);
+	//---------------------------------------
+	// 注册设备
+	LONG lUserID;
+	NET_DVR_DEVICEINFO_V30 struDeviceInfo;
+	lUserID = NET_DVR_Login_V30("172.27.111.10", 8000, "admin", "admin12345", &struDeviceInfo);
+	if (lUserID < 0)
+	{
+		printf("Login error, %d\n", NET_DVR_GetLastError());
+		NET_DVR_Cleanup();
+		return;
+	}
+	//---------------------------------------
+	//设置异常消息回调函数
+	NET_DVR_SetExceptionCallBack_V30(0, NULL, g_ExceptionCallBack, NULL); //---------------------------------------
+	//启动预览并设置回调数据流
+	LONG lRealPlayHandle;
+	cvNamedWindow("Mywindow", 0);
+	HWND  h = (HWND)cvGetWindowHandle("Mywindow");
+	if (h == 0)
+	{
+		cout << "窗口创建失败" << endl;
+	}
+	NET_DVR_PREVIEWINFO struPlayInfo = { 0 };
+	struPlayInfo.hPlayWnd = h;         //需要SDK解码时句柄设为有效值，仅取流不解码时可设为空
+	struPlayInfo.lChannel = 1;           //预览通道号
+	struPlayInfo.dwStreamType = 0;       //0-主码流，1-子码流，2-码流3，3-码流4，以此类推
+	struPlayInfo.dwLinkMode = 0; //0- TCP方式，1- UDP方式，2- 多播方式，3- RTP方式，4-RTP/RTSP，5-RSTP/HTTP
+	lRealPlayHandle = NET_DVR_RealPlay_V40(lUserID, &struPlayInfo, fRealDataCallBack, NULL);
+	if (lRealPlayHandle < 0)
+	{
+		printf("NET_DVR_RealPlay_V40 error\n");
+		printf("%d\n", NET_DVR_GetLastError());
+		NET_DVR_Logout(lUserID);
+		NET_DVR_Cleanup();
+		return;
+	}
+	waitKey();
+	Sleep(-1);
+	//---------------------------------------
+	//关闭预览
+	NET_DVR_StopRealPlay(lRealPlayHandle);
+	//注销用户
+	NET_DVR_Logout(lUserID);
+	//释放SDK资源
+	NET_DVR_Cleanup();
+	return;
+}
